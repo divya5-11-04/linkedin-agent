@@ -29,6 +29,10 @@ jobs:
         run: |
           git config user.name "linkedin-agent-bot"
           git config user.email "actions@github.com"
-          git add telegram_offset.json
-          git diff --staged --quiet || git commit -m "chore: update telegram offset [skip ci]"
-          git push || true
+          if [ -f telegram_offset.json ]; then
+            git add telegram_offset.json
+            git diff --staged --quiet || git commit -m "chore: update telegram offset [skip ci]"
+            git push || true
+          else
+            echo "telegram_offset.json not found, skipping commit."
+          fi

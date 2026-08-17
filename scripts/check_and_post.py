@@ -24,6 +24,9 @@ updates = resp.json().get("result", [])
 
 if not updates:
     print("No new Telegram messages.")
+    # still write the state file so the workflow's git add step has something to commit
+    with open(STATE_FILE, "w") as f:
+        json.dump({"last_update_id": offset}, f)
     exit(0)
 
 post_text = None
