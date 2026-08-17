@@ -45,7 +45,7 @@ resp = requests.post(
     "https://api.groq.com/openai/v1/chat/completions",
     headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
     json={
-        "model": "llama-3.3-70b-versatile",
+        "model": "gpt-oss-120b",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
