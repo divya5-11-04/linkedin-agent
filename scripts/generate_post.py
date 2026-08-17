@@ -55,7 +55,10 @@ resp = requests.post(
     },
     timeout=60,
 )
-resp.raise_for_status()
+if not resp.ok:
+    print("STATUS:", resp.status_code)
+    print("RESPONSE:", resp.text)
+    resp.raise_for_status()
 draft = resp.json()["choices"][0]["message"]["content"].strip()
 
 with open("draft_post.txt", "w") as f:
