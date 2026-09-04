@@ -1,0 +1,104 @@
+import os
+import json
+import requests
+
+from validators import validate_draft
+from retry import with_retries
+
+with open("repo_data.json") as f:
+    repo_data = json.load(f)
+
+extra_context = os.environ.get("EXTRA_CONTEXT", "")
+groq_key = os.environ["GROQ_API_KEY"]
+
+SYSTEM_PROMPT = """You write LinkedIn posts for a software engineer announcing a project they built.
+
+Hard rules:
+- Sound like a real person talking to other engineers/recruiters, not a marketing bot.
+- NO hashtag spam (max 3, only if genuinely relevant, at the very end).
+- NO "Excited to share 🚀" / "Thrilled to announce" / "Game-changer" / generic LinkedIn-influencer phrases.
+- Open with something concrete: the problem, a surprising result, or what it does — not "I built a project."
+- Include specifics: what it does, what stack/approach, what was hard or interesting about it, and a real outcome or number if available.
+- Keep it 100-180 words. Short paragraphs (1-3 sentences), easy to skim on mobile.
+- End with a plain, low-key call to action (e.g. "Repo link in comments" or "Curious what you'd have done differently").
+- Do not use em dashes.
+- Write in first person, past or present tense as natural.
+
+Output ONLY the post text. No preamble, no explanation, no quotes around it.
+"""
+
+user_prompt = f"""
+Repo: {repo_data['repo']}
+Description: {repo_data['description']}
+Primary language: {repo_data['language']}
+Topics: {', '.join(repo_data['topics'])}
+Stars: {repo_data['stars']}
+Repo URL: {repo_data['url']}
+
+README (may be truncated):
+{repo_data['readme']}
+
+Recent commit messages (for flavor on what was actually worked on):
+{chr(10).join('- ' + c for c in repo_data['recent_commits'])}
+
+Extra context from the author (prioritize this if given): {extra_context or '(none provided)'}
+"""
+
+
+def call_groq(messages: list) -> str:
+    def _do_call():
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={
+                "model": "openai/gpt-oss-120b",
+                "messages": messages,
+                "temperature": 0.8,
+                "max_tokens": 600,
+            },
+            timeout=60,
+        )
+        if not resp.ok:
+            print("STATUS:", resp.status_code)
+            print("RESPONSE:", resp.text)
+            resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+    return with_retries(
+        _do_call,
+        attempts=3,
+        base_delay=2.0,
+        on_retry=lambda attempt, exc, delay: print(f"Groq call failed (attempt {attempt}): {exc}. Retrying in {delay:.0f}s..."),
+    )
+
+
+messages = [
+    {"role": "system", "content": SYSTEM_PROMPT},
+    {"role": "user", "content": user_prompt},
+]
+
+draft = call_groq(messages)
+is_valid, issues = validate_draft(draft)
+
+# One regeneration attempt if the model didn't follow its own instructions --
+# tell it exactly what it got wrong instead of silently accepting a bad draft.
+if not is_valid:
+    print(f"Draft failed validation: {issues}. Requesting one revision.")
+    messages.append({"role": "assistant", "content": draft})
+    messages.append({
+        "role": "user",
+        "content": f"That draft violates the rules above: {'; '.join(issues)}. Rewrite it, fixing those issues, following all the original rules.",
+    })
+    draft = call_groq(messages)
+    is_valid, issues = validate_draft(draft)
+    if not is_valid:
+        # Don't silently ship a bad draft -- flag it loudly so the human reviewer
+        # sees it before approving in Telegram.
+        print(f"WARNING: draft still fails validation after revision: {issues}")
+        draft = f"[UNVALIDATED -- {'; '.join(issues)}]\n\n{draft}"
+
+with open("draft_post.txt", "w") as f:
+    f.write(draft)
+
+print("--- DRAFT ---")
+print(draft)
